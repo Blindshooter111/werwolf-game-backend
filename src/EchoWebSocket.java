@@ -5,10 +5,7 @@ import org.eclipse.jetty.websocket.api.annotations.OnWebSocketMessage;
 import org.eclipse.jetty.websocket.api.annotations.WebSocket;
 
 import java.io.IOException;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Map;
-import java.util.Queue;
+import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
 
@@ -17,9 +14,16 @@ import java.util.concurrent.ConcurrentLinkedQueue;
 public class EchoWebSocket {
     private static final Map<String, Lobby> lobbies = new ConcurrentHashMap<>();
     private static final Queue<Session> sessions = new ConcurrentLinkedQueue<>();
+    private static final Map<Session, Integer> clients = new ConcurrentHashMap<>();
+    private int i = 0;
+
     @OnWebSocketConnect
     public void connected(Session session){
-        sessions.add(session);
+        sessions.add((session));
+        clients.put(session, i);
+        i++;
+        System.out.println(i);
+
     }
 
     @OnWebSocketClose
@@ -30,26 +34,32 @@ public class EchoWebSocket {
     @OnWebSocketMessage
     public void message(Session session, String message) throws IOException {
         System.out.println("Got: " + message);
-        String[] parts = message.split(" ");
+        String[] parts = message.split(" ", 3);
         String command = parts[0];
 
         if (parts.length < 2) {
-            session.getRemote().sendString("Invalid command format. Expected: COMMAND LOBBY_ID");
+            session.getRemote().sendString("Invalid command format. Expected: COMMAND LOBBY_ID [MESSAGE]");
             return; // Exit the method early if the command format is incorrect
         }
 
-        String lobbyId = parts[1]; // Now it's safe to access parts[1]
+        String lobbyId = parts[1];
 
         switch (command) {
             case "CREATE_LOBBY":
                 createLobby(session, lobbyId);
-
                 break;
             case "JOIN_LOBBY":
                 joinLobby(session, lobbyId);
                 break;
             case "START_GAME":
                 startGame(lobbyId);
+                break;
+            case "CHAT":
+                if (parts.length < 3) {
+                    session.getRemote().sendString("CHAT command requires a message.");
+                } else {
+                    broadcastMessage(lobbyId, session, parts[2]);
+                }
                 break;
             default:
                 session.getRemote().sendString("Unknown command");
@@ -61,7 +71,7 @@ public class EchoWebSocket {
             session.getRemote().sendString("Lobby already exists");
         } else {
             lobbies.put(lobbyId, new Lobby(lobbyId));
-            session.getRemote().sendString("Lobby created: " + lobbyId);
+            session.getRemote().sendString("LOBBY_CREATED " + lobbyId);
         }
     }
 
@@ -71,7 +81,7 @@ public class EchoWebSocket {
             session.getRemote().sendString("Lobby does not exist");
         } else {
             lobby.addPlayer(session);
-            session.getRemote().sendString("Joined lobby: " + lobbyId);
+            session.getRemote().sendString("LOBBY_JOINED " + lobbyId);
         }
     }
 
@@ -81,9 +91,21 @@ public class EchoWebSocket {
             System.out.println("Lobby does not exist");
             return;
         }
-        // Game starting logic here
         for (Session player : lobby.getPlayers()) {
             player.getRemote().sendString("Game is starting in lobby: " + lobbyId);
+        }
+    }
+
+    private void broadcastMessage(String lobbyId, Session sender, String message) throws IOException {
+        Lobby lobby = lobbies.get(lobbyId);
+        if (lobby != null) {
+            for (Session player : lobby.getPlayers()) {
+                if (player != sender) {
+                    player.getRemote().sendString("CHAT " + message);
+                }
+            }
+        } else {
+            sender.getRemote().sendString("Lobby does not exist.");
         }
     }
 
