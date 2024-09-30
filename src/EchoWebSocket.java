@@ -10,25 +10,25 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
 
 
+
 @WebSocket
 public class EchoWebSocket {
     private static final Map<String, Lobby> lobbies = new ConcurrentHashMap<>();
     private static final Queue<Session> sessions = new ConcurrentLinkedQueue<>();
-    private static final Map<Session, Integer> clients = new ConcurrentHashMap<>();
+    private static final Map<Session, String> clients = new ConcurrentHashMap<>();  // Changed to store UUID
     private int i = 0;
 
     @OnWebSocketConnect
-    public void connected(Session session){
-        sessions.add((session));
-        clients.put(session, i);
-        i++;
-        System.out.println(i);
-
+    public void connected(Session session) {
+        sessions.add(session);
+        System.out.println("Client connected");
     }
 
     @OnWebSocketClose
-    public void closed(Session session, int statusCode, String reason){
+    public void closed(Session session, int statusCode, String reason) {
         sessions.remove(session);
+        clients.remove(session);
+        System.out.println("Client disconnected");
     }
 
     @OnWebSocketMessage
@@ -36,28 +36,27 @@ public class EchoWebSocket {
         System.out.println("Got: " + message);
         String[] parts = message.split(" ", 3);
         String command = parts[0];
-
+        String lobbyId;
         if (parts.length < 2) {
             session.getRemote().sendString("Invalid command format. Expected: COMMAND LOBBY_ID [MESSAGE]");
             return; // Exit the method early if the command format is incorrect
         }
 
-        String lobbyId = parts[1];
 
         switch (command) {
             case "CREATE_LOBBY":
+                lobbyId = parts[1];
                 createLobby(session, lobbyId);
                 break;
             case "JOIN_LOBBY":
+                lobbyId = parts[1];
                 joinLobby(session, lobbyId);
-                break;
-            case "START_GAME":
-                startGame(lobbyId);
                 break;
             case "CHAT":
                 if (parts.length < 3) {
                     session.getRemote().sendString("CHAT command requires a message.");
                 } else {
+                    lobbyId = parts[1];
                     broadcastMessage(lobbyId, session, parts[2]);
                 }
                 break;
@@ -70,6 +69,14 @@ public class EchoWebSocket {
         if (lobbies.containsKey(lobbyId)) {
             session.getRemote().sendString("Lobby already exists");
         } else {
+            // Generate UUID only if it does not exist
+            if (!clients.containsKey(session)) {
+                String clientId = UUID.randomUUID().toString();
+                clients.put(session, clientId);
+                session.getRemote().sendString("UUID " + clientId);
+                System.out.println("Client assigned UUID: " + clientId);
+            }
+
             lobbies.put(lobbyId, new Lobby(lobbyId));
             session.getRemote().sendString("LOBBY_CREATED " + lobbyId);
         }
@@ -80,7 +87,15 @@ public class EchoWebSocket {
         if (lobby == null) {
             session.getRemote().sendString("Lobby does not exist");
         } else {
-            lobby.addPlayer(session);
+            // Generate UUID only if it does not exist
+            if (!clients.containsKey(session)) {
+                String clientId = UUID.randomUUID().toString();
+                clients.put(session, clientId);
+                session.getRemote().sendString("UUID " + clientId);
+                System.out.println("Client assigned UUID: " + clientId);
+            }
+
+            lobby.addPlayer(session, clients.get(session));  // Add player with their UUID
             session.getRemote().sendString("LOBBY_JOINED " + lobbyId);
         }
     }
@@ -91,7 +106,7 @@ public class EchoWebSocket {
             System.out.println("Lobby does not exist");
             return;
         }
-        for (Session player : lobby.getPlayers()) {
+        for (Session player : lobby.getPlayers().keySet()) {
             player.getRemote().sendString("Game is starting in lobby: " + lobbyId);
         }
     }
@@ -99,9 +114,11 @@ public class EchoWebSocket {
     private void broadcastMessage(String lobbyId, Session sender, String message) throws IOException {
         Lobby lobby = lobbies.get(lobbyId);
         if (lobby != null) {
-            for (Session player : lobby.getPlayers()) {
+            String senderClientId = clients.get(sender);  // Hole die ClientId des Absenders
+            for (Session player : lobby.getPlayers().keySet()) {
                 if (player != sender) {
-                    player.getRemote().sendString("CHAT " + message);
+                    // Sende die Nachricht im Format "CLIENT_ID: MESSAGE"
+                    player.getRemote().sendString("CHAT " + senderClientId + ": " + message);
                 }
             }
         } else {
@@ -112,18 +129,18 @@ public class EchoWebSocket {
     // Inner class to manage a lobby
     static class Lobby {
         private final String id;
-        private final List<Session> players;
+        private final Map<Session, String> players;  // Map to store session and client UUID
 
         Lobby(String id) {
             this.id = id;
-            this.players = new ArrayList<>();
+            this.players = new ConcurrentHashMap<>();
         }
 
-        void addPlayer(Session session) {
-            players.add(session);
+        void addPlayer(Session session, String clientId) {
+            players.put(session, clientId);
         }
 
-        List<Session> getPlayers() {
+        Map<Session, String> getPlayers() {
             return players;
         }
     }
